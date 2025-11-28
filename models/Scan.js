@@ -1,79 +1,34 @@
-const express = require('express');
-const router = express.Router();
-const Scan = require('../models/Scan');
-const auth = require('../middleware/auth');
+// models/Scan.js
+const mongoose = require('mongoose');
 
-// @route   POST /api/scans
-// @desc    Record a new scan
-// @access  Private
-router.post('/', auth, async (req, res) => {
-  try {
-    const { barcode, productName, prices } = req.body;
-
-    // Check scan limit
-    if (!req.user.canScan()) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Scan limit reached. Please upgrade your plan.' 
-      });
-    }
-
-    // Create scan record
-    const scan = new Scan({
-      userId: req.user._id,
-      barcode,
-      productName,
-      prices
-    });
-
-    await scan.save();
-
-    // Increment user's scan count
-    await req.user.incrementScans();
-
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
-
-    res.json({
-      success: true,
-      data: {
-        scan,
-        scansRemaining: req.user.tier === 'premium' ? 
-          'unlimited' : 
-          scanLimits[req.user.tier] - req.user.scansThisMonth
-      }
-    });
-  } catch (error) {
-    console.error('Scan error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during scan' 
-    });
-  }
+const scanSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  barcode: {
+    type: String,
+    required: true
+  },
+  productName: {
+    type: String,
+    required: true
+  },
+  scannedAt: {
+    type: Date,
+    default: Date.now
+  },
+  prices: [{
+    retailer: String,
+    price: Number,
+    inStock: Boolean
+  }]
+}, {
+  timestamps: true
 });
 
-// @route   GET /api/scans/history
-// @desc    Get user's scan history
-// @access  Private
-router.get('/history', auth, async (req, res) => {
-  try {
-    const scans = await Scan.find({ userId: req.user._id })
-      .sort({ scannedAt: -1 })
-      .limit(50);
+// Index for faster queries
+scanSchema.index({ userId: 1, scannedAt: -1 });
 
-    res.json({
-      success: true,
-      data: scans
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error' 
-    });
-  }
-});
-
-module.exports = router;
+module.exports = mongoose.model('Scan', scanSchema);

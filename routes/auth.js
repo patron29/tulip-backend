@@ -1,8 +1,16 @@
+// routes/auth.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+
+// Scan limits by tier
+const SCAN_LIMITS = {
+  free: 5,
+  basic: 100,
+  premium: Infinity
+};
 
 // Generate JWT token
 const generateToken = (userId) => {
@@ -11,6 +19,22 @@ const generateToken = (userId) => {
     process.env.JWT_SECRET, 
     { expiresIn: '30d' }
   );
+};
+
+// Helper to format user response
+const formatUserResponse = (user) => {
+  const scansRemaining = user.tier === 'premium' 
+    ? 'unlimited' 
+    : Math.max(0, SCAN_LIMITS[user.tier] - user.scansThisMonth);
+    
+  return {
+    id: user._id,
+    email: user.email,
+    name: user.name,
+    tier: user.tier,
+    scansRemaining,
+    scansThisMonth: user.scansThisMonth
+  };
 };
 
 // @route   POST /api/auth/signup
@@ -28,8 +52,25 @@ router.post('/signup', async (req, res) => {
       });
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide a valid email address' 
+      });
+    }
+
+    // Validate password length
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Password must be at least 6 characters' 
+      });
+    }
+
     // Check if user exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ 
         success: false, 
@@ -39,7 +80,7 @@ router.post('/signup', async (req, res) => {
 
     // Create new user
     const user = new User({
-      email,
+      email: email.toLowerCase(),
       password,
       name,
       tier: 'free'
@@ -54,13 +95,7 @@ router.post('/signup', async (req, res) => {
       success: true,
       data: {
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          tier: user.tier,
-          scansRemaining: 5 - user.scansThisMonth
-        }
+        user: formatUserResponse(user)
       }
     });
   } catch (error) {
@@ -88,7 +123,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Find user
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(401).json({ 
         success: false, 
@@ -96,8 +131,8 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Check password
-    const isMatch = await user.comparePassword(password);
+    // Check password using matchPassword method
+    const isMatch = await user.matchPassword(password);
     if (!isMatch) {
       return res.status(401).json({ 
         success: false, 
@@ -111,25 +146,11 @@ router.post('/login', async (req, res) => {
     // Generate token
     const token = generateToken(user._id);
 
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
-
     res.json({
       success: true,
       data: {
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          tier: user.tier,
-          scansRemaining: user.tier === 'premium' ? 
-            'unlimited' : 
-            scanLimits[user.tier] - user.scansThisMonth
-        }
+        user: formatUserResponse(user)
       }
     });
   } catch (error) {
@@ -156,7 +177,9 @@ router.post('/google', async (req, res) => {
     }
 
     // Check if user exists
-    let user = await User.findOne({ $or: [{ googleId }, { email }] });
+    let user = await User.findOne({ 
+      $or: [{ googleId }, { email: email.toLowerCase() }] 
+    });
 
     if (user) {
       // Update googleId if user exists but didn't have it
@@ -167,7 +190,7 @@ router.post('/google', async (req, res) => {
     } else {
       // Create new user
       user = new User({
-        email,
+        email: email.toLowerCase(),
         name,
         googleId,
         tier: 'free'
@@ -179,25 +202,11 @@ router.post('/google', async (req, res) => {
 
     const token = generateToken(user._id);
 
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
-
     res.json({
       success: true,
       data: {
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          tier: user.tier,
-          scansRemaining: user.tier === 'premium' ? 
-            'unlimited' : 
-            scanLimits[user.tier] - user.scansThisMonth
-        }
+        user: formatUserResponse(user)
       }
     });
   } catch (error) {
@@ -223,7 +232,9 @@ router.post('/apple', async (req, res) => {
       });
     }
 
-    let user = await User.findOne({ $or: [{ appleId }, { email }] });
+    let user = await User.findOne({ 
+      $or: [{ appleId }, { email: email.toLowerCase() }] 
+    });
 
     if (user) {
       if (!user.appleId) {
@@ -232,7 +243,7 @@ router.post('/apple', async (req, res) => {
       }
     } else {
       user = new User({
-        email,
+        email: email.toLowerCase(),
         name: name || 'Apple User',
         appleId,
         tier: 'free'
@@ -244,25 +255,11 @@ router.post('/apple', async (req, res) => {
 
     const token = generateToken(user._id);
 
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
-
     res.json({
       success: true,
       data: {
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          tier: user.tier,
-          scansRemaining: user.tier === 'premium' ? 
-            'unlimited' : 
-            scanLimits[user.tier] - user.scansThisMonth
-        }
+        user: formatUserResponse(user)
       }
     });
   } catch (error) {
@@ -279,24 +276,10 @@ router.post('/apple', async (req, res) => {
 // @access  Private
 router.get('/me', auth, async (req, res) => {
   try {
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
-
     res.json({
       success: true,
       data: {
-        user: {
-          id: req.user._id,
-          email: req.user.email,
-          name: req.user.name,
-          tier: req.user.tier,
-          scansRemaining: req.user.tier === 'premium' ? 
-            'unlimited' : 
-            scanLimits[req.user.tier] - req.user.scansThisMonth
-        }
+        user: formatUserResponse(req.user)
       }
     });
   } catch (error) {
@@ -317,7 +300,7 @@ router.put('/upgrade', auth, async (req, res) => {
     if (!['basic', 'premium'].includes(tier)) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Invalid tier' 
+        message: 'Invalid tier. Must be "basic" or "premium"' 
       });
     }
 
@@ -331,30 +314,42 @@ router.put('/upgrade', auth, async (req, res) => {
     
     await req.user.save();
 
-    const scanLimits = {
-      free: 5,
-      basic: 100,
-      premium: Infinity
-    };
+    res.json({
+      success: true,
+      data: {
+        user: formatUserResponse(req.user)
+      }
+    });
+  } catch (error) {
+    console.error('Upgrade error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error during upgrade' 
+    });
+  }
+});
+
+// @route   PUT /api/auth/downgrade
+// @desc    Downgrade user tier to free
+// @access  Private
+router.put('/downgrade', auth, async (req, res) => {
+  try {
+    req.user.tier = 'free';
+    req.user.subscriptionStartDate = null;
+    req.user.subscriptionEndDate = null;
+    
+    await req.user.save();
 
     res.json({
       success: true,
       data: {
-        user: {
-          id: req.user._id,
-          email: req.user.email,
-          name: req.user.name,
-          tier: req.user.tier,
-          scansRemaining: req.user.tier === 'premium' ? 
-            'unlimited' : 
-            scanLimits[req.user.tier] - req.user.scansThisMonth
-        }
+        user: formatUserResponse(req.user)
       }
     });
   } catch (error) {
     res.status(500).json({ 
       success: false, 
-      message: 'Server error' 
+      message: 'Server error during downgrade' 
     });
   }
 });
